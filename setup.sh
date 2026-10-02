@@ -1,5 +1,12 @@
 #!/bin/bash
 set -e
+# Instalar dependencias para repositorios externos
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg
+
+# Instalar Node.js LTS (incluye npm)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
 
 echo "📦 1/4 Instalando paquetes de Node..."
 npm install
