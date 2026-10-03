@@ -78,7 +78,7 @@ async function iniciarMonitor() {
       await page.locator('#control_209').click({ timeout: 15000 });
       await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click();
       await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click();
-      await page.locator('div').filter({ hasText: /^Autogestión servicios en línea con NAF\.$/ }).first().click();
+      await page.locator('div').filter({ hasText: /^Devoluciones\.$/ }).first().click();
 
       console.log('Evaluando si carga el cuadro de sedes o sale error...');
 
