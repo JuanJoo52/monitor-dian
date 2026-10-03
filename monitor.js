@@ -78,7 +78,7 @@ async function iniciarMonitor() {
       await page.locator('#control_209').click({ timeout: 15000 });
       await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click();
       await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click();
-      await page.locator('div').filter({ hasText: /^Devoluciones\.$/ }).first().click();
+      await page.locator('div').filter({ hasText: /^Autogestión servicios en línea con NAF\.$/ }).first().click();
 
       console.log('Evaluando si carga el cuadro de sedes o sale error...');
 
@@ -89,6 +89,7 @@ async function iniciarMonitor() {
       if (cuadroVisible) {
         // ÉXITO ABSOLUTO: Apareció el recuadro blanco
         console.log('🚨 ¡HAY CITAS DETECTADAS! Tomando captura...');
+        await page.locator('#control_204').click();
         await esperar(1000);
         const captura = await page.screenshot({ fullPage: true });
         
@@ -126,7 +127,7 @@ async function iniciarMonitor() {
       
       try {
         const capturaFallo = await page.screenshot({ timeout: 5000 });
-        await enviarCapturaTelegram(capturaFallo, '⚠️ *Alerta DIAN:* La página colapsó. Reiniciando en 2 minutos...');
+        await enviarCapturaTelegram(capturaFallo, `⚠️ *Alerta DIAN:* La página colapsó. Reiniciando en ${ESPERA_COLAPSO / 1000} s...`);
       } catch (e) {
         // Si ni siquiera deja tomar foto, enviamos solo texto
         await enviarCapturaTelegram(null, '⚠️ *Alerta DIAN:* La página colapsó tan fuerte que no dejó tomar captura. Reiniciando en 2 minutos...');
