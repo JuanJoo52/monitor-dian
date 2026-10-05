@@ -84,7 +84,7 @@ async function iniciarMonitor() {
 
       // --- VALIDACIÓN ESTRICTA ---
       // Le damos 15 segundos a la página para que decida qué mostrar
-      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
+      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false);
 
       if (cuadroVisible) {
         // ÉXITO ABSOLUTO: Apareció el recuadro blanco
