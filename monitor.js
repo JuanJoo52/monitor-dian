@@ -13,7 +13,7 @@ if (!TELEGRAM_TOKEN || !CHAT_ID) {
 }
 
 const DIAN_URL = 'https://agendamiento.dian.gov.co/';
-const ESPERA_COLAPSO = 20000;
+const ESPERA_COLAPSO = 15000;
 
 
 const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -75,16 +75,19 @@ async function iniciarMonitor() {
       await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
       // --- TUS PASOS DE NAVEGACIÓN ---
-      await page.locator('#control_209').click({ timeout: 15000 });
-      await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click();
-      await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click();
-      await page.locator('div').filter({ hasText: /^Devoluciones\.$/ }).first().click();
+      await page.locator('#control_209').click({ timeout: 10000 });
+      await esperar(300);
+      await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click({ timeout: 7000 });
+      await esperar(300);
+      await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click({ timeout: 7000 });
+      await esperar(300);
+      await page.locator('div').filter({ hasText: /^Devoluciones\.$/ }).first().click({ timeout: 7000 });
 
       console.log('Evaluando si carga el cuadro de sedes o sale error...');
 
       // --- VALIDACIÓN ESTRICTA ---
       // Le damos 15 segundos a la página para que decida qué mostrar
-      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false);
+      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 7000 }).then(() => true).catch(() => false);
 
       if (cuadroVisible) {
         // ÉXITO ABSOLUTO: Apareció el recuadro blanco
