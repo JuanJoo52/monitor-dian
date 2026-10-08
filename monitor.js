@@ -14,8 +14,7 @@ if (!TELEGRAM_TOKEN || !CHAT_ID) {
 
 const DIAN_URL = 'https://agendamiento.dian.gov.co/';
 const ESPERA_COLAPSO = 20000;
-const TIMEOUT_CUADRO_SEDES = 25000; // antes 15000: evita falsos "colapso" cuando la DIAN está lenta
-const CICLOS_ANTES_DE_RECICLAR = 100; // cierra y reabre el browser cada N chequeos
+
 
 const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -37,11 +36,16 @@ async function enviarCapturaTelegram(buffer, mensaje, maxIntentos = 3) {
   // Bucle de reintentos
   for (let intento = 1; intento <= maxIntentos; intento++) {
     try {
+      // Hacemos la petición
       await fetch(url, { method: 'POST', body: formData });
-      break; // éxito, no repetimos
+
+      // Si llega a esta línea, el envío fue un éxito. Rompemos el ciclo para no repetir.
+      break;
     } catch (err) {
       console.error(`❌ Fallo al enviar a Telegram (Intento ${intento}/${maxIntentos}):`, err.message);
+
       if (intento < maxIntentos) {
+        // Esperamos 3 segundos antes del próximo intento
         await esperar(3000);
       } else {
         console.error('❌ Se agotaron los intentos de Telegram. El mensaje no se pudo enviar.');
@@ -53,20 +57,11 @@ async function enviarCapturaTelegram(buffer, mensaje, maxIntentos = 3) {
 async function iniciarMonitor() {
   console.log('🚀 Iniciando monitor robusto de la DIAN...');
 
-  // Browser persistente (se usa `let` porque se recicla periódicamente)
-  let browser = await chromium.launch({ headless: true });
-  let ciclos = 0;
+  // 1. Abrimos el navegador UNA SOLA VEZ para proteger la memoria del servidor
+  const browser = await chromium.launch({ headless: true });
 
+  // 2. Ciclo infinito seguro
   while (true) {
-    ciclos++;
-
-    // Reciclaje periódico del browser para evitar memory creep en corridas largas
-    if (ciclos > 1 && ciclos % CICLOS_ANTES_DE_RECICLAR === 0) {
-      console.log(`♻️ Reciclando navegador tras ${CICLOS_ANTES_DE_RECICLAR} ciclos...`);
-      await browser.close().catch(() => {});
-      browser = await chromium.launch({ headless: true });
-    }
-
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       viewport: { width: 1920, height: 1080 }
@@ -74,11 +69,11 @@ async function iniciarMonitor() {
     const page = await context.newPage();
 
     try {
-      console.log(`\n[${new Date().toLocaleTimeString('es-CO')}] Consultando disponibilidad... (ciclo ${ciclos})`);
+      console.log(`\n[${new Date().toLocaleTimeString('es-CO')}] Consultando disponibilidad...`);
 
       await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
-      // --- PASOS DE NAVEGACIÓN ---
+      // --- TUS PASOS DE NAVEGACIÓN ---
       await page.locator('#control_209').click({ timeout: 15000 });
       await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click();
       await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click();
@@ -86,39 +81,19 @@ async function iniciarMonitor() {
 
       console.log('Evaluando si carga el cuadro de sedes o sale error...');
 
-      // --- VALIDACIÓN ESTRICTA (reacciona a lo que aparezca primero) ---
-      // En vez de esperar primero por #control_204 y recién después revisar el modal
-      // (lo que obligaba a esperar el timeout completo cuando salía el modal),
-      // hacemos polling corto comprobando ambos selectores cada 300ms.
-      const cuadroLocator = page.locator('#control_204');
-      const modalSinCitasLocator = page.getByText('No se encontraron especialidades');
-
-      const POLL_MS = 300;
-      const inicioEspera = Date.now();
-      let cuadroVisible = false;
-      let hayModal = false;
-
-      while (Date.now() - inicioEspera < TIMEOUT_CUADRO_SEDES) {
-        cuadroVisible = await cuadroLocator.isVisible().catch(() => false);
-        if (cuadroVisible) break;
-
-        hayModal = await modalSinCitasLocator.isVisible().catch(() => false);
-        if (hayModal) break;
-
-        await esperar(POLL_MS);
-      }
+      // --- VALIDACIÓN ESTRICTA ---
+      // Le damos 15 segundos a la página para que decida qué mostrar
+      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
 
       if (cuadroVisible) {
         // ÉXITO ABSOLUTO: Apareció el recuadro blanco
         console.log('🚨 ¡HAY CITAS DETECTADAS! Dando clic y tomando captura...');
-
+        
+        // Clic directo al control_204
         await page.locator('#control_204').click({ timeout: 5000 });
         await esperar(1000);
 
-        const captura = await page.screenshot({ fullPage: true }).catch(() => null);
-
-        await page.close().catch(() => {});
-        await context.close().catch(() => {});
+        const captura = await page.screenshot({ fullPage: true });
 
         await enviarCapturaTelegram(captura,
           '🚨 *¡HAY CITAS EN LA DIAN!*\n\n' +
@@ -127,17 +102,21 @@ async function iniciarMonitor() {
           `[Ingresar a agendar de inmediato](${DIAN_URL})`
         );
 
+        await page.close();
+        await context.close();
         console.log(`Cita reportada. Esperando el intervalo normal (${INTERVAL / 1000}s) para seguir consultando...`);
-        await esperar(INTERVAL);
+        await esperar(INTERVAL); // Usa el mismo tiempo normal de espera que tienes en tu .env
         continue;
       }
 
-      // Si no salió el cuadro, ya sabemos (por la carrera de arriba) si salió el modal de "No hay citas"
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      // Si no salió el cuadro, verificamos si es que salió tu modal de "No hay citas"
+      const modalSinCitas = page.getByText('No se encontraron especialidades');
+      const hayModal = await modalSinCitas.isVisible();
 
       if (hayModal) {
         console.log('ℹ️ Sin citas (salió el modal normal).');
+        await page.close();
+        await context.close();
         await esperar(INTERVAL);
         continue;
       }
@@ -148,24 +127,16 @@ async function iniciarMonitor() {
     } catch (error) {
       console.warn(`⚠️ Caída detectada: ${error.message.split('\n')[0]}`);
 
-      let capturaFallo = null;
       try {
-        capturaFallo = await page.screenshot({ timeout: 5000 });
-      } catch (e) {
-        capturaFallo = null;
-      }
-
-      // Cerramos page/context antes de enviar a Telegram, así no quedan colgados
-      // mientras esperamos los reintentos de red.
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
-
-      if (capturaFallo) {
+        const capturaFallo = await page.screenshot({ timeout: 5000 });
         await enviarCapturaTelegram(capturaFallo, '⚠️ *Alerta DIAN:* La página colapsó. Reiniciando en 2 minutos...');
-      } else {
+      } catch (e) {
+        // Si ni siquiera deja tomar foto, enviamos solo texto
         await enviarCapturaTelegram(null, '⚠️ *Alerta DIAN:* La página colapsó tan fuerte que no dejó tomar captura. Reiniciando...');
       }
 
+      await page.close().catch(() => { });
+      await context.close().catch(() => { });
       await esperar(ESPERA_COLAPSO);
     }
   }
