@@ -5,25 +5,22 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const INTERVAL = (parseInt(process.env.CHECK_INTERVAL_SECONDS, 10) || 45) * 1000;
 
-// Validación de seguridad de arranque
 if (!TELEGRAM_TOKEN || !CHAT_ID) {
   console.error('❌ ERROR CRÍTICO: Faltan credenciales de Telegram.');
-  console.error('Asegúrate de que el archivo .env existe y contiene TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.');
-  process.exit(1); // Detiene la ejecución inmediatamente para no correr en vano
+  process.exit(1);
 }
 
 const DIAN_URL = 'https://agendamiento.dian.gov.co/';
-const ESPERA_COLAPSO = 20000;
-
+const ESPERA_COLAPSO = 10000;
 
 const esperar = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Función centralizada para enviar mensaje + captura a Telegram (Con auto-reintentos)
 async function enviarCapturaTelegram(buffer, mensaje, maxIntentos = 3) {
   const formData = new FormData();
   formData.append('chat_id', CHAT_ID);
   formData.append('caption', mensaje);
   formData.append('parse_mode', 'Markdown');
+
   let url = '';
   if (buffer) {
     formData.append('photo', new Blob([buffer]), 'captura.png');
@@ -33,63 +30,80 @@ async function enviarCapturaTelegram(buffer, mensaje, maxIntentos = 3) {
     url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   }
 
-  // Bucle de reintentos
   for (let intento = 1; intento <= maxIntentos; intento++) {
     try {
-      // Hacemos la petición
       await fetch(url, { method: 'POST', body: formData });
-
-      // Si llega a esta línea, el envío fue un éxito. Rompemos el ciclo para no repetir.
       break;
     } catch (err) {
       console.error(`❌ Fallo al enviar a Telegram (Intento ${intento}/${maxIntentos}):`, err.message);
-
-      if (intento < maxIntentos) {
-        // Esperamos 3 segundos antes del próximo intento
-        await esperar(3000);
-      } else {
-        console.error('❌ Se agotaron los intentos de Telegram. El mensaje no se pudo enviar.');
-      }
+      if (intento < maxIntentos) await esperar(3000);
     }
   }
 }
 
 async function iniciarMonitor() {
-  console.log('🚀 Iniciando monitor robusto de la DIAN...');
+  console.log('🚀 Iniciando monitor optimizado de la DIAN...');
 
-  // 1. Abrimos el navegador UNA SOLA VEZ para proteger la memoria del servidor
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  });
 
-  // 2. Ciclo infinito seguro
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 },
+    locale: 'es-CO',
+    timezoneId: 'America/Bogota',
+    extraHTTPHeaders: {
+      'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8'
+    }
+  });
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+
+  const page = await context.newPage();
+
+  // Primera carga completa de la página
+  await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+
   while (true) {
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 }
-    });
-    const page = await context.newPage();
-
     try {
       console.log(`\n[${new Date().toLocaleTimeString('es-CO')}] Consultando disponibilidad...`);
 
-      await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      // 1. Asegurar que estamos en el punto de partida (si por alguna razón se desvió, recarga)
+      const botonInicio = page.locator('#control_209');
+      const inicioVisible = await botonInicio.isVisible();
+      if (!inicioVisible) {
+        await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      }
 
-      // --- TUS PASOS DE NAVEGACIÓN ---
+      // --- PASOS DE NAVEGACIÓN ---
       await page.locator('#control_209').click({ timeout: 15000 });
       await page.locator('div').filter({ hasText: /^PersonaNatural$/ }).first().click();
       await page.locator('div:nth-child(2) > .contentImgTipoAtencion > .img-fluid').click();
       await page.locator('div').filter({ hasText: /^Devoluciones\.$/ }).first().click();
 
+      // Pausa técnica para permitir el despacho de la consulta
+      await esperar(1500);
+
       console.log('Evaluando si carga el cuadro de sedes o sale error...');
 
-      // --- VALIDACIÓN ESTRICTA ---
-      // Le damos 15 segundos a la página para que decida qué mostrar
-      const cuadroVisible = await page.locator('#control_204').waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
+      // --- VALIDACIÓN DE CITAS ---
+      const cuadroVisible = await page.locator('#control_204')
+        .waitFor({ state: 'visible', timeout: 15000 })
+        .then(() => true)
+        .catch(() => false);
 
       if (cuadroVisible) {
-        // ÉXITO ABSOLUTO: Apareció el recuadro blanco
-        console.log('🚨 ¡HAY CITAS DETECTADAS! Dando clic y tomando captura...');
-        
-        // Clic directo al control_204
+        console.log('🚨 ¡HAY CITAS DETECTADAS! Haciendo clic y tomando captura...');
         await page.locator('#control_204').click({ timeout: 5000 });
         await esperar(1000);
 
@@ -102,45 +116,52 @@ async function iniciarMonitor() {
           `[Ingresar a agendar de inmediato](${DIAN_URL})`
         );
 
-        await page.close();
-        await context.close();
-        console.log(`Cita reportada. Esperando el intervalo normal (${INTERVAL / 1000}s) para seguir consultando...`);
-        await esperar(INTERVAL); // Usa el mismo tiempo normal de espera que tienes en tu .env
+        console.log(`Cita reportada. Esperando intervalo (${INTERVAL / 1000}s)...`);
+        await esperar(INTERVAL);
+        // Tras reportar, recargamos la página limpia para volver a monitorear
+        await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
         continue;
       }
 
-      // Si no salió el cuadro, verificamos si es que salió tu modal de "No hay citas"
+      // --- VALIDACIÓN DEL MODAL SIN CITAS ---
       const modalSinCitas = page.getByText('No se encontraron especialidades');
       const hayModal = await modalSinCitas.isVisible();
 
       if (hayModal) {
-        console.log('ℹ️ Sin citas (salió el modal normal).');
-        await page.close();
-        await context.close();
+        console.log('ℹ️ Sin citas. Haciendo clic en Aceptar para reiniciar el flujo...');
+
+        // Hacemos clic en el botón "Aceptar" del modal
+        const botonAceptar = page.getByRole('button', { name: /Aceptar/i });
+        await botonAceptar.click({ timeout: 5000 }).catch(async () => {
+          // Si no lo encuentra por rol de botón, clic por texto general
+          await page.locator('text=Aceptar').first().click({ timeout: 3000 });
+        });
+
+        // Esperamos el intervalo normal con la página ya lista
         await esperar(INTERVAL);
         continue;
       }
 
-      // Si no salió ni el cuadro de éxito ni el modal de error... la página colapsó
+      // Si no hay cuadro ni modal, la página se trabó
       throw new Error('La página no mostró citas ni mensaje de error (se quedó en blanco o congelada).');
 
     } catch (error) {
       console.warn(`⚠️ Caída detectada: ${error.message.split('\n')[0]}`);
 
+      const segundosReintento = ESPERA_COLAPSO / 1000;
+
       try {
         const capturaFallo = await page.screenshot({ timeout: 5000 });
-        await enviarCapturaTelegram(capturaFallo, '⚠️ *Alerta DIAN:* La página colapsó. Reiniciando en 2 minutos...');
+        await enviarCapturaTelegram(capturaFallo, `⚠️ *Alerta DIAN:* La página colapsó. Reiniciando en ${segundosReintento} segundos...`);
       } catch (e) {
-        // Si ni siquiera deja tomar foto, enviamos solo texto
-        await enviarCapturaTelegram(null, '⚠️ *Alerta DIAN:* La página colapsó tan fuerte que no dejó tomar captura. Reiniciando...');
+        await enviarCapturaTelegram(null, `⚠️ *Alerta DIAN:* La página colapsó tan fuerte que no dejó tomar captura. Reiniciando en ${segundosReintento} segundos...`);
       }
 
-      await page.close().catch(() => { });
-      await context.close().catch(() => { });
+      // En caso de colapso real, recargamos la URL completa para empezar de cero
       await esperar(ESPERA_COLAPSO);
+      await page.goto(DIAN_URL, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     }
   }
 }
 
-// Arrancar
 iniciarMonitor();
